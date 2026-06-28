@@ -1,0 +1,12 @@
+# generated artifacts
+__pycache__/
+*.pyc
+ckpt/
+figures/
+results/
+logs/
+stats/
+*.pt
+
+# os
+.DS_Store
