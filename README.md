@@ -18,10 +18,28 @@ pip install -r requirements.txt
 
 ## Data
 
-Put `tech_stocks_tips.csv` on your Desktop (`~/Desktop/tech_stocks_tips.csv`), or in this
-project folder / its parent — the loader falls back automatically. Columns: a date index,
-10 ticker price columns (IBM, CSCO, AAPL, MSFT, ORCL, INTC, TXN, QCOM, AMAT, ADBE), and one
-real-yield level column `y10_real`.
+Both inputs are built by **`python explore/import_data.py`** (single injection
+point, mirroring cdg_finance):
+
+- `explore/macro_data_new.csv` — daily adjusted-close **prices** for the 10
+  tickers (IBM, CSCO, AAPL, MSFT, ORCL, INTC, TXN, QCOM, AMAT, ADBE) from
+  yfinance; `data.py` computes log returns itself. → `config.csv_path`
+- `latent_state_estimation/inflation_state.csv` — the latent
+  **inflation-pressure state**: `s` = Kalman-filtered daily state level,
+  `delta_s` = its daily increment (drives the surge event label).
+  → `config.state_csv`
+
+The state is estimated by `latent_state_estimation/` (ported from cdg_finance):
+`tracking_regression.py` builds a PCA monthly factor + daily futures tracking
+portfolio per macro variable; `state_space.py` runs the joint Kalman filter
+(MLE, Nelder-Mead — takes several minutes); `macro_main.py` wraps both as
+`LatentStateEstimator`. Default is the inflation-only (scalar) state; use
+`--joint` for the growth+inflation two-sensor state. The committed macro panel
+CSVs are used as-is — refresh them (rarely) with
+`FRED_API_KEY=... python latent_state_estimation/macro_importer.py`.
+
+If the built files are missing, the loader falls back to the legacy
+`~/Desktop/tech_stocks_tips.csv` / project-dir copies automatically.
 
 ## Run
 
@@ -77,6 +95,30 @@ classifier struggles, raise it toward `1.0` to guide earlier in the reverse proc
 `||corr(uncond) − corr(actual_event)||_F` — i.e. conditioning pulls the correlation
 structure toward real rate-shock days (typically a broad rise / "clustering" of
 cross-sectional correlation).
+
+## Analysis & evaluation (`analysis/`, ported from cdg_finance)
+
+`bash run.sh analysis` runs every script below against the pipeline outputs:
+loss CSVs in `ckpt/`, checkpoints, and the generated windows that
+`run.sh sample` saves to `results/samples/samples_{htag}_g{gamma}.pt`.
+Outputs land in `results/analysis/<htag>/`. All comparisons are in
+**standardized (z) space** and use the **last day of each 10-day window**
+(the ACF script alone uses the full day axis — it measures within-window
+volatility clustering).
+
+| script | what it shows |
+|---|---|
+| `analysis/losses.py` | pretrain + h-function loss curves (from `ckpt/*_losses*.csv`) |
+| `analysis/h_function_eval.py` | h calibration vs noise level τ, split by true event label (no sampling involved) |
+| `analysis/unconditional_gen.py` | real (all) vs uncond-generated last-day KDEs + diagnostics table |
+| `analysis/conditional_gen.py` | real EVENT windows vs Doob-conditional last-day KDEs + table |
+| `analysis/cov.py` | last-day 10×10 corr & cov heatmaps: real all/event vs uncond/cond + Frobenius check |
+| `analysis/distribution_metrics.py` | per-stock Wasserstein-1 distances + log-log tail plots (last-day) |
+| `analysis/dependency_metric.py` | ACF of squared returns (vol clustering) real vs generated + t-test p-values |
+
+Each script also runs standalone, e.g.
+`python analysis/cov.py --event-quantile 0.9 --h-t-max 1 --gamma 2` — the flags
+must match the run that produced the checkpoints/samples (files are keyed by them).
 
 ## Math reference (VP SDE, t∈[0,1], t=0 data → t=1 noise)
 

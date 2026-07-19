@@ -8,6 +8,7 @@ from typing import List
 import os
 import torch
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Stock universe (order is fixed; data.py will re-detect from the CSV header anyway).
 TICKERS: List[str] = ["IBM", "CSCO", "AAPL", "MSFT", "ORCL",
@@ -17,11 +18,14 @@ TICKERS: List[str] = ["IBM", "CSCO", "AAPL", "MSFT", "ORCL",
 @dataclass
 class Config:
     # ---- data ----
-    csv_path: str = os.path.expanduser("~/Desktop/tech_stocks_tips.csv")
-    # inflation-pressure state (from the inflation_pressure_state project); its daily
-    # increment delta_s drives the surge event. Falls back to a same-named file in
-    # the project dir (see resolve_state).
-    state_csv: str = os.path.expanduser("~/Desktop/inflation_state.csv")
+    # Both inputs are built by explore/import_data.py (single injection point):
+    #   csv_path  — daily adjusted-close prices for the 10 tickers (yfinance)
+    #   state_csv — latent inflation-pressure state (s + daily increment delta_s,
+    #               Kalman-filtered via latent_state_estimation/); delta_s drives
+    #               the surge event. resolve_csv/resolve_state fall back to the
+    #               legacy Desktop / project-dir files if these don't exist yet.
+    csv_path: str = os.path.join(_HERE, "explore", "macro_data_new.csv")
+    state_csv: str = os.path.join(_HERE, "latent_state_estimation", "inflation_state.csv")
     train_frac: float = 0.80          # time-ordered split, no shuffle
     n_assets: int = 10
     # ---- 10x10 window ----
@@ -103,21 +107,27 @@ class Config:
         return self.seq_len * self.n_assets
 
     def resolve_state(self) -> str:
-        """Locate the inflation-state CSV: ~/Desktop path, else the project dir copy."""
-        if os.path.exists(self.state_csv):
-            return self.state_csv
-        local = os.path.join(os.path.dirname(__file__), "inflation_state.csv")
-        if os.path.exists(local):
-            return local
+        """Locate the inflation-state CSV: cfg path (latent_state_estimation output
+        by default), else the legacy Desktop / project-dir copies."""
+        for p in (self.state_csv,
+                  os.path.join(_HERE, "latent_state_estimation", "inflation_state.csv"),
+                  os.path.expanduser("~/Desktop/inflation_state.csv"),
+                  os.path.join(_HERE, "inflation_state.csv")):
+            if p and os.path.exists(p):
+                return p
         raise FileNotFoundError(
-            f"Could not find inflation_state.csv at {self.state_csv} or in the project dir.")
+            f"No inflation state CSV found (tried {self.state_csv} + legacy fallbacks). "
+            f"Build it with: python explore/import_data.py --state")
 
     def resolve_csv(self) -> str:
-        """Spec: use ~/Desktop path; fall back to a same-named file in the project dir."""
-        if os.path.exists(self.csv_path):
-            return self.csv_path
-        local = os.path.join(os.path.dirname(__file__), "tech_stocks_tips.csv")
-        if os.path.exists(local):
-            return local
+        """Locate the stock price CSV: cfg path (explore/import_data.py output by
+        default), else the legacy Desktop / project-dir tech_stocks_tips.csv."""
+        for p in (self.csv_path,
+                  os.path.join(_HERE, "explore", "macro_data_new.csv"),
+                  os.path.expanduser("~/Desktop/tech_stocks_tips.csv"),
+                  os.path.join(_HERE, "tech_stocks_tips.csv")):
+            if p and os.path.exists(p):
+                return p
         raise FileNotFoundError(
-            f"Could not find tech_stocks_tips.csv at {self.csv_path} or in the project dir.")
+            f"No stock price CSV found (tried {self.csv_path} + legacy fallbacks). "
+            f"Build it with: python explore/import_data.py --stocks")

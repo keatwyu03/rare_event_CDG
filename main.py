@@ -43,6 +43,8 @@ def build_config():
                    default="all", help="which part of the pipeline to run")
     # data / device
     p.add_argument("--csv-path", default=cfg.csv_path)
+    p.add_argument("--state-csv", default=cfg.state_csv,
+                   help="latent inflation-state CSV (delta_s drives the event label)")
     p.add_argument("--start-date", default=cfg.start_date, help="data window start YYYY-MM-DD")
     p.add_argument("--end-date", default=cfg.end_date, help="data window end YYYY-MM-DD")
     p.add_argument("--event-quantile", type=float, default=cfg.event_quantile,
@@ -128,6 +130,16 @@ def stage_sample(cfg, data, score_model=None, h_model=None):
 
     X_uncond = sample_unconditional(cfg, score_model)
     X_cond = sample_conditional(cfg, score_model, h_model)
+
+    # persist generated windows (standardized space) for the analysis scripts,
+    # keyed by (event_quantile, h_t_max, gamma) so sweep runs never collide
+    sdir = os.path.join("results", "samples")
+    os.makedirs(sdir, exist_ok=True)
+    spath = os.path.join(sdir, f"samples_{cfg.htag()}_g{cfg.gamma:g}.pt")
+    torch.save({"X_uncond": X_uncond.cpu(), "X_cond": X_cond.cpu(),
+                "event_quantile": cfg.event_quantile, "h_t_max": cfg.h_t_max,
+                "gamma": cfg.gamma}, spath)
+    print(f"[main] saved generated windows -> {spath}")
 
     seq, n, tickers = data["seq_len"], data["n_assets"], data["tickers"]
     tm = data["B_train"] > 0.5

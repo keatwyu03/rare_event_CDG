@@ -7,6 +7,8 @@
 #   bash run.sh pretrain        # train the diffusion backbone only
 #   bash run.sh hfunction       # train the h-function only (independent of backbone)
 #   bash run.sh sample          # load both ckpts, conditional generation + plots
+#   bash run.sh analysis        # run analysis/ scripts on the outputs (last-day
+#                               # corr/cov, KDEs, Wasserstein, tails, ACF, h-eval)
 #
 #   GPU=1 bash run.sh           # pick CUDA device 1
 #
@@ -29,7 +31,10 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-$GPU}"
 # (a plain `VAR=...` assignment would IGNORE the env var — don't use that here).
 
 # ---- data ----
-CSV_PATH="${CSV_PATH:-$HOME/Desktop/tech_stocks_tips.csv}"
+# Built by `python explore/import_data.py` (stock prices + latent state);
+# config.py falls back to the legacy Desktop/project files if these are missing.
+CSV_PATH="${CSV_PATH:-explore/macro_data_new.csv}"
+STATE_CSV="${STATE_CSV:-latent_state_estimation/inflation_state.csv}"
 SEED="${SEED:-0}"
 START_DATE=""   # data window (YYYY-MM-DD); set empty for all data
 END_DATE=""       # pick a stable window with: python select_window.py
@@ -66,9 +71,34 @@ N_STEPS="${N_STEPS:-100}"        # reverse Euler-Maruyama steps
 SAMPLE_BATCH="${SAMPLE_BATCH:-1000}"   # sampling mini-batch (lower if GPU OOM)
 GAMMA="${GAMMA:-2.0}"            # Doob guidance strength (1.0 = exact)
 
+# ---- analysis stage: run every analysis/ script against the pipeline outputs
+# (needs ckpts + the samples file written by `run.sh sample` for the same
+# EVENT_QUANTILE / H_T_MAX / GAMMA). ----
+if [ "$STAGE" = "analysis" ]; then
+    for s in analysis/losses.py \
+             analysis/h_function_eval.py \
+             analysis/unconditional_gen.py \
+             analysis/conditional_gen.py \
+             analysis/cov.py \
+             analysis/distribution_metrics.py \
+             analysis/dependency_metric.py; do
+        echo "==== $s ===="
+        python -u "$s" \
+            --csv-path  "$CSV_PATH" \
+            --state-csv "$STATE_CSV" \
+            --start-date "$START_DATE" \
+            --end-date   "$END_DATE" \
+            --event-quantile "$EVENT_QUANTILE" \
+            --h-t-max   "$H_T_MAX" \
+            --gamma     "$GAMMA" || echo "!!!! $s failed — continuing"
+    done
+    exit 0
+fi
+
 python -u main.py \
     --stage     "$STAGE" \
     --csv-path  "$CSV_PATH" \
+    --state-csv "$STATE_CSV" \
     --start-date "$START_DATE" \
     --end-date   "$END_DATE" \
     --event-quantile "$EVENT_QUANTILE" \

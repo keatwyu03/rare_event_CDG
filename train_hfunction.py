@@ -4,6 +4,7 @@ Uses the SAME VP forward noising as the backbone. Handles the ~10/90 imbalance
 with BCEWithLogits pos_weight = #neg/#pos.
 """
 import os
+import pandas as pd
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
@@ -84,6 +85,9 @@ def train_hfunction(cfg, data):
     arch = {k: getattr(cfg, k) for k in ("h_d_model", "h_n_heads", "h_n_layers",
                                          "h_dim_ff", "h_dropout", "seq_len", "n_assets")}
     torch.save({"model": model.state_dict(), "h_t_max": cfg.h_t_max, "arch": arch}, ckpt_path)
+    # loss curve as CSV for diffusion_model_analysis/losses.py (keyed like the ckpt)
+    pd.DataFrame({"epoch": range(1, len(losses) + 1), "loss": losses}).to_csv(
+        os.path.join(cfg.ckpt_dir, f"hfunction_losses_{cfg.htag()}.csv"), index=False)
 
     fig_path = os.path.join(cfg.fig_dir, cfg.htag(), "loss_hfunction.png")
     os.makedirs(os.path.dirname(fig_path), exist_ok=True)

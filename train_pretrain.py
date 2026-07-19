@@ -1,5 +1,6 @@
 """Pretrain the unconditional diffusion backbone via eps-prediction (DSM)."""
 import os
+import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 
@@ -47,6 +48,9 @@ def train_pretrain(cfg, data):
                                          "pre_dim_ff", "pre_dropout", "seq_len", "n_assets")}
     torch.save({"model": model.state_dict(), "ema": ema_model.state_dict(), "arch": arch},
                os.path.join(cfg.ckpt_dir, "pretrain.pt"))
+    # loss curve as CSV for diffusion_model_analysis/losses.py
+    pd.DataFrame({"epoch": range(1, len(losses) + 1), "loss": losses}).to_csv(
+        os.path.join(cfg.ckpt_dir, "pretrain_losses.csv"), index=False)
 
     os.makedirs(cfg.fig_dir, exist_ok=True)
     plt.figure(figsize=(6, 4))
