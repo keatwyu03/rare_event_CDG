@@ -20,7 +20,7 @@ import numpy as np
 import torch
 
 from config import Config
-from data import load_data, print_data_stats
+from data import load_data, print_data_stats, destandardize, sample_entries
 from models import TransformerScore, TransformerClassifier
 from train_pretrain import train_pretrain
 from train_hfunction import train_hfunction
@@ -38,12 +38,15 @@ def set_seed(seed):
 def build_config():
     cfg = Config()
     p = argparse.ArgumentParser(description="Rate-shock conditional diffusion")
-    p.add_argument("--stage", choices=["stats", "pretrain", "hfunction", "sample", "all"],
+    p.add_argument("--stage",
+                   choices=["stats", "pretrain", "hfunction", "sample", "all"],
                    default="all", help="which part of the pipeline to run")
     # data / device
     p.add_argument("--csv-path", default=cfg.csv_path)
     p.add_argument("--start-date", default=cfg.start_date, help="data window start YYYY-MM-DD")
     p.add_argument("--end-date", default=cfg.end_date, help="data window end YYYY-MM-DD")
+    p.add_argument("--event-quantile", type=float, default=cfg.event_quantile,
+                   help="Δy quantile defining the event (0.90=top10%%, 0.99=top1%%/rarer)")
     p.add_argument("--device", default=cfg.device)
     p.add_argument("--gpu", type=int, default=None, help="CUDA device index to use")
     p.add_argument("--seed", type=int, default=cfg.seed)
@@ -87,21 +90,33 @@ def build_config():
     return cfg, args.stage
 
 
+def _apply_arch(cfg, sd):
+    """Rebuild-time arch override: use the architecture stored in the ckpt so a
+    changed run.sh/config can't cause a state_dict mismatch. Older ckpts without
+    'arch' fall back to the current cfg (set matching PRE_*/H_* manually)."""
+    for k, v in sd.get("arch", {}).items():
+        setattr(cfg, k, v)
+
+
 def load_backbone(cfg):
     path = os.path.join(cfg.ckpt_dir, "pretrain.pt")
     sd = torch.load(path, map_location=cfg.device)
+    _apply_arch(cfg, sd)
     m = TransformerScore(cfg).to(cfg.device)
     m.load_state_dict(sd["ema"])           # use EMA weights for sampling
-    print(f"[main] loaded backbone (EMA) from {path}")
+    print(f"[main] loaded backbone (EMA) from {path}"
+          f"{' [arch from ckpt]' if 'arch' in sd else ''}")
     return m
 
 
 def load_hfunction(cfg):
     path = cfg.hfunction_ckpt()                 # keyed by h_t_max
     sd = torch.load(path, map_location=cfg.device)
+    _apply_arch(cfg, sd)
     m = TransformerClassifier(cfg).to(cfg.device)
     m.load_state_dict(sd["model"])
-    print(f"[main] loaded h-function (h_t_max={cfg.h_t_max:g}) from {path}")
+    print(f"[main] loaded h-function (h_t_max={cfg.h_t_max:g}) from {path}"
+          f"{' [arch from ckpt]' if 'arch' in sd else ''}")
     return m
 
 
@@ -114,20 +129,46 @@ def stage_sample(cfg, data, score_model=None, h_model=None):
     X_uncond = sample_unconditional(cfg, score_model)
     X_cond = sample_conditional(cfg, score_model, h_model)
 
-    mu, sd, tickers = data["mu"], data["sd"], data["tickers"]
-    X_train_all, X_test_all = data["X_train"], data["X_test"]
-    train_mask = data["B_train"] > 0.5
-    test_mask = data["B_test"] > 0.5
-    X_event_train = data["X_train"][train_mask]       # in-sample reference
-    X_event_test = data["X_test"][test_mask]          # out-of-sample reference
-    print(f"[main] event days: train={int(train_mask.sum())}  test={int(test_mask.sum())}")
+    seq, n, tickers = data["seq_len"], data["n_assets"], data["tickers"]
+    tm = data["B_train"] > 0.5
+    te = data["B_test"] > 0.5
+    tm_np, te_np = tm.cpu().numpy(), te.cpu().numpy()
+    print(f"[main] event windows: train={int(tm.sum())}  test={int(te.sum())}")
+
+    # entry (mu,sig) pools that set the raw-logret scale for de-standardization
+    mtr, str_ = data["mu_entry_train"], data["sig_entry_train"]
+    mte, ste = data["mu_entry_test"], data["sig_entry_test"]
+
+    def dstd(X, mu_e, sig_e):
+        return destandardize(X, mu_e, sig_e, seq, n)
+
+    # actual -> raw logret using each window's OWN entry EMA
+    tr_all = dstd(data["X_train"], mtr, str_)
+    te_all = dstd(data["X_test"], mte, ste)
+    tr_evt = dstd(data["X_train"][tm], mtr[tm_np], str_[tm_np])
+    te_evt = dstd(data["X_test"][te], mte[te_np], ste[te_np])
+
+    # generated -> raw logret using entry (mu,sig) SAMPLED from the comparison set
+    gu_tr = dstd(X_uncond, *sample_entries(mtr, str_, len(X_uncond), cfg.seed))
+    gc_tr = dstd(X_cond,   *sample_entries(mtr, str_, len(X_cond),   cfg.seed))
+    gu_te = dstd(X_uncond, *sample_entries(mte, ste, len(X_uncond), cfg.seed))
+    gc_te = dstd(X_cond,   *sample_entries(mte, ste, len(X_cond),   cfg.seed))
+
+    # global window indices for deduped-neighborhood pooling (calendar day = g*shift + d)
+    n_train = data["X_train"].shape[0]
+    shift = cfg.window_shift
+    g_tr_all = np.arange(n_train)
+    g_te_all = n_train + np.arange(data["X_test"].shape[0])
+    g_tr_evt = np.where(tm_np)[0]
+    g_te_evt = n_train + np.where(te_np)[0]
 
     # --- per-stock marginal stats (mean ± std), printed to log ---
     viz.print_marginal_stats({
-        "train_uncond": X_train_all,   "train_cond": X_event_train,
-        "test_uncond":  X_test_all,    "test_cond":  X_event_test,
-        "gen_uncond":   X_uncond,      "gen_cond":   X_cond,
-    }, mu, sd, tickers)
+        "train_uncond": tr_all,   "train_cond": tr_evt,
+        "test_uncond":  te_all,   "test_cond":  te_evt,
+        "gen_uncond(tr)": gu_tr,  "gen_cond(tr)": gc_tr,
+        "gen_uncond(te)": gu_te,  "gen_cond(te)": gc_te,
+    }, tickers)
 
     # outputs go under figures/tmax{h_t_max}/ , filenames tagged with gamma so a
     # t_max sweep (and a gamma sweep within it) never overwrites earlier figures.
@@ -135,20 +176,37 @@ def stage_sample(cfg, data, score_model=None, h_model=None):
     g = f"g{cfg.gamma:g}"                   # e.g. "g1"
     tag = f"{sub}_{g}"
 
-    # --- histograms ---
-    viz.hist_compare(cfg, X_cond, X_event_train, mu, sd, tickers,
+    # --- histograms: actual event side DEDUPED by calendar day; generated pooled ---
+    viz.hist_compare(cfg, gc_tr, tr_evt, tickers,
                      f"{sub}/hist_insample_{g}.png",
-                     f"In-sample [{tag}]: conditional generated vs TRAIN event-day logret",
-                     gen_label="conditional", actual_label="train event")
-    viz.hist_compare(cfg, X_cond, X_event_test, mu, sd, tickers,
+                     f"In-sample [{tag}]: conditional (train-scaled) vs TRAIN event logret",
+                     gen_label="conditional", actual_label="train event",
+                     actual_gidx=g_tr_evt, seq=seq, shift=shift)
+    viz.hist_compare(cfg, gc_te, te_evt, tickers,
                      f"{sub}/hist_outsample_{g}.png",
-                     f"Out-of-sample [{tag}]: conditional generated vs TEST event-day logret",
-                     gen_label="conditional", actual_label="test event")
+                     f"Out-of-sample [{tag}]: conditional (test-scaled) vs TEST event logret",
+                     gen_label="conditional", actual_label="test event",
+                     actual_gidx=g_te_evt, seq=seq, shift=shift)
 
-    # --- correlation grid (2x3): actual train/test (all/event) vs generated (uncond/Doob) ---
-    viz.corr_grid(cfg, X_train_all, X_test_all, X_uncond,
-                  X_event_train, X_event_test, X_cond, mu, sd, tickers,
-                  filename=f"{sub}/corr_grid_{g}.png", tag=tag)
+    # --- correlation grid (2x3), TWO versions ---
+    # (a) raw logret: actual de-standardized w/ own entries, generated w/ entries
+    #     sampled from the comparison set (train/test-scaled). Reflects the real
+    #     (vol-weighted) correlation but mixes in the de-standardization/entry pairing.
+    viz.corr_grid(cfg,
+                  {"train all": (tr_all, g_tr_all), "test all": (te_all, g_te_all),
+                   "train event": (tr_evt, g_tr_evt), "test event": (te_evt, g_te_evt)},
+                  gu_tr, gc_tr, gu_te, gc_te, tickers, seq, shift,
+                  filename=f"{sub}/corr_grid_{g}.png", tag=tag, space="raw logret")
+
+    # (b) standardized (z) space: no de-standardization. Isolates how well the model
+    #     learned the vol-normalized cross-sectional structure (no entry/vol confound;
+    #     generated z is used directly for both train and test comparisons).
+    Xtr, Xte = data["X_train"], data["X_test"]
+    viz.corr_grid(cfg,
+                  {"train all": (Xtr, g_tr_all), "test all": (Xte, g_te_all),
+                   "train event": (Xtr[tm], g_tr_evt), "test event": (Xte[te], g_te_evt)},
+                  X_uncond, X_cond, X_uncond, X_cond, tickers, seq, shift,
+                  filename=f"{sub}/corr_grid_std_{g}.png", tag=tag, space="standardized")
 
 
 def main():
@@ -175,8 +233,13 @@ def main():
     if stage in ("pretrain", "all"):
         score_model = train_pretrain(cfg, data)
         X_gen = sample_unconditional(cfg, score_model)
-        viz.hist_pretrain_vs_actual(cfg, X_gen, data["X_test"],
-                                    data["mu"], data["sd"], data["tickers"])
+        seq, n = data["seq_len"], data["n_assets"]
+        te_all = destandardize(data["X_test"], data["mu_entry_test"], data["sig_entry_test"], seq, n)
+        gen = destandardize(X_gen, *sample_entries(data["mu_entry_test"], data["sig_entry_test"],
+                                                   len(X_gen), cfg.seed), seq, n)
+        g_te_all = data["X_train"].shape[0] + np.arange(data["X_test"].shape[0])
+        viz.hist_pretrain_vs_actual(cfg, gen, te_all, data["tickers"],
+                                    actual_gidx=g_te_all, seq=seq, shift=cfg.window_shift)
     if stage in ("hfunction", "all"):
         h_model = train_hfunction(cfg, data)
     if stage in ("sample", "all"):

@@ -26,7 +26,6 @@ from data import build_clean_frame
 MIN_LEN     = 1200        # min window length (trading days)
 LEN_STEP    = 250         # window-length grid step
 SLIDE_STEP  = 120         # start-index grid step
-MIN_EVENTS  = 25          # need this many events in BOTH splits to score a window
 RESULTS_DIR = "results/window"
 
 
@@ -39,7 +38,7 @@ def _avg_pairwise_corr(X):
     return float(C[iu].mean())
 
 
-def _score_window(sub, logret_cols, cfg):
+def _score_window(sub, logret_cols, cfg, min_events):
     """sub: clean DataFrame slice. Returns metrics dict or None if infeasible."""
     n_train = int(cfg.train_frac * len(sub))
     train, test = sub.iloc[:n_train], sub.iloc[n_train:]
@@ -48,7 +47,7 @@ def _score_window(sub, logret_cols, cfg):
     thr = train["dy"].quantile(cfg.event_quantile)
     tr_evt = train[train["dy"] >= thr]
     te_evt = test[test["dy"] >= thr]
-    if len(tr_evt) < MIN_EVENTS or len(te_evt) < MIN_EVENTS:
+    if len(tr_evt) < min_events or len(te_evt) < min_events:
         return None
 
     a_tr = _avg_pairwise_corr(train[logret_cols].values)
@@ -67,26 +66,48 @@ def _score_window(sub, logret_cols, cfg):
 
 
 def main():
+    import argparse
     cfg = Config()
+    p = argparse.ArgumentParser(description="Scan for correlation-stable data windows")
+    p.add_argument("--event-quantile", type=float, default=cfg.event_quantile,
+                   help="Δy quantile defining the event (e.g. 0.90, 0.99)")
+    p.add_argument("--min-events", type=int, default=None,
+                   help="min events required in BOTH splits (auto-scales with quantile)")
+    p.add_argument("--train-frac", type=float, default=cfg.train_frac)
+    args = p.parse_args()
+    cfg.event_quantile = args.event_quantile
+    cfg.train_frac = args.train_frac
+    # rarer events -> fewer per window, so relax the minimum unless overridden
+    min_events = args.min_events if args.min_events is not None \
+        else (10 if cfg.event_quantile >= 0.97 else 25)
+
     data, logret_cols, _, _ = build_clean_frame(cfg, verbose=False)
     N = len(data)
     print(f"[scan] full data: {N} rows, {data.index[0].date()} -> {data.index[-1].date()}")
+    print(f"[scan] event_quantile={cfg.event_quantile:g}  train_frac={cfg.train_frac:g}  "
+          f"min_events={min_events}")
 
     rows = []
     for L in range(MIN_LEN, N + 1, LEN_STEP):
         for s in range(0, N - L + 1, SLIDE_STEP):
-            m = _score_window(data.iloc[s:s + L], logret_cols, cfg)
+            m = _score_window(data.iloc[s:s + L], logret_cols, cfg, min_events)
             if m is not None:
                 rows.append(m)
     # always include the full-data baseline for reference
-    base = _score_window(data, logret_cols, cfg)
+    base = _score_window(data, logret_cols, cfg, min_events)
     if base is not None:
         base["start_label"] = "FULL"
         rows.append(base)
 
+    if not rows:
+        print(f"[scan] no window had >= {min_events} events in both splits at "
+              f"quantile {cfg.event_quantile:g}. Try --min-events smaller.")
+        return
+
     df = pd.DataFrame(rows).sort_values("score").reset_index(drop=True)
+    qtag = f"q{round(cfg.event_quantile*100,4):g}"
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    df.to_csv(os.path.join(RESULTS_DIR, "window_scan.csv"), index=False)
+    df.to_csv(os.path.join(RESULTS_DIR, f"window_scan_{qtag}.csv"), index=False)
 
     show = ["start", "end", "n", "n_evt_train", "n_evt_test",
             "corr_train_all", "corr_test_all", "diff_all",
@@ -119,12 +140,12 @@ def main():
                     c=[pd.Timestamp(d).year for d in scan["start"]], cmap="viridis", s=18)
     ax.scatter(best["n"], best["score"], color="red", s=80, marker="*", label="recommended")
     ax.set_xlabel("window length (days)"); ax.set_ylabel("train/test corr gap (lower=better)")
-    ax.set_title("Window scan: correlation-level stability"); ax.legend()
+    ax.set_title(f"Window scan ({qtag}): correlation-level stability"); ax.legend()
     fig.colorbar(sc, ax=ax, label="start year")
     fig.tight_layout()
-    p = os.path.join(RESULTS_DIR, "window_scan.png")
+    p = os.path.join(RESULTS_DIR, f"window_scan_{qtag}.png")
     fig.savefig(p, dpi=120); plt.close(fig)
-    print(f"\n[scan] saved {RESULTS_DIR}/window_scan.csv and window_scan.png")
+    print(f"\n[scan] saved {RESULTS_DIR}/window_scan_{qtag}.csv and window_scan_{qtag}.png")
 
 
 if __name__ == "__main__":

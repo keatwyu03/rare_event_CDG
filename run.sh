@@ -31,13 +31,15 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-$GPU}"
 # ---- data ----
 CSV_PATH="${CSV_PATH:-$HOME/Desktop/tech_stocks_tips.csv}"
 SEED="${SEED:-0}"
-START_DATE="${START_DATE:-2004-06-09}"   # data window (YYYY-MM-DD); set empty for all data
-END_DATE="${END_DATE:-2017-02-23}"       # pick a stable window with: python select_window.py
+START_DATE=""   # data window (YYYY-MM-DD); set empty for all data
+END_DATE=""       # pick a stable window with: python select_window.py
+EVENT_QUANTILE="${EVENT_QUANTILE:-0.90}" # Δy quantile = event; 0.90=top10%, 0.99=rarer.
+                                         # h ckpt/figures are keyed by this (q90, q99, ...).
 
 # ---- pretrain: score backbone (richer net — score matching is the harder task) ----
 PRE_D_MODEL="${PRE_D_MODEL:-256}"
-PRE_N_HEADS="${PRE_N_HEADS:-8}"
-PRE_N_LAYERS="${PRE_N_LAYERS:-6}"
+PRE_N_HEADS="${PRE_N_HEADS:-16}"
+PRE_N_LAYERS="${PRE_N_LAYERS:-8}"
 PRE_DIM_FF="${PRE_DIM_FF:-512}"
 PRE_DROPOUT="${PRE_DROPOUT:-0.0}"
 PRE_EPOCHS="${PRE_EPOCHS:-500}"
@@ -45,15 +47,15 @@ PRE_BATCH="${PRE_BATCH:-256}"
 PRE_LR="${PRE_LR:-1e-4}"
 
 # ---- h-function: time-dependent classifier (lighter net) ----
-H_D_MODEL="${H_D_MODEL:-128}"
-H_N_HEADS="${H_N_HEADS:-4}"
-H_N_LAYERS="${H_N_LAYERS:-4}"
+H_D_MODEL="${H_D_MODEL:-256}"
+H_N_HEADS="${H_N_HEADS:-8}"
+H_N_LAYERS="${H_N_LAYERS:-6}"
 H_DIM_FF="${H_DIM_FF:-256}"
 H_DROPOUT="${H_DROPOUT:-0.0}"
-H_EPOCHS="${H_EPOCHS:-300}"
+H_EPOCHS="${H_EPOCHS:-500}"
 H_BATCH="${H_BATCH:-256}"
 H_LR="${H_LR:-1e-4}"
-H_T_MAX="${H_T_MAX:-0.6}"        # only t in [eps0, H_T_MAX] (near clean data) used to
+H_T_MAX="${H_T_MAX:-1}"        # only t in [eps0, H_T_MAX] (near clean data) used to
                                  # train h / apply guidance; ckpt is keyed by this value.
 H_POS_WEIGHT="${H_POS_WEIGHT:--1}"   # BCE positive-class weight for the ~10% imbalance.
                                  # <=0 = auto (#neg/#pos ≈ 9); positive value overrides.
@@ -62,13 +64,14 @@ H_POS_WEIGHT="${H_POS_WEIGHT:--1}"   # BCE positive-class weight for the ~10% im
 N_SAMPLE="${N_SAMPLE:-10000}"    # M samples for histograms / correlation
 N_STEPS="${N_STEPS:-100}"        # reverse Euler-Maruyama steps
 SAMPLE_BATCH="${SAMPLE_BATCH:-1000}"   # sampling mini-batch (lower if GPU OOM)
-GAMMA="${GAMMA:-1.0}"            # Doob guidance strength (1.0 = exact)
+GAMMA="${GAMMA:-2.0}"            # Doob guidance strength (1.0 = exact)
 
 python -u main.py \
     --stage     "$STAGE" \
     --csv-path  "$CSV_PATH" \
     --start-date "$START_DATE" \
     --end-date   "$END_DATE" \
+    --event-quantile "$EVENT_QUANTILE" \
     --seed      "$SEED" \
     --pre-d-model  "$PRE_D_MODEL" \
     --pre-n-heads  "$PRE_N_HEADS" \

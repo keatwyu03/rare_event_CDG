@@ -18,9 +18,19 @@ TICKERS: List[str] = ["IBM", "CSCO", "AAPL", "MSFT", "ORCL",
 class Config:
     # ---- data ----
     csv_path: str = os.path.expanduser("~/Desktop/tech_stocks_tips.csv")
+    # inflation-pressure state (from the inflation_pressure_state project); its daily
+    # increment delta_s drives the surge event. Falls back to a same-named file in
+    # the project dir (see resolve_state).
+    state_csv: str = os.path.expanduser("~/Desktop/inflation_state.csv")
     train_frac: float = 0.80          # time-ordered split, no shuffle
-    event_quantile: float = 0.90      # top 10% of Δy = rate-shock event
     n_assets: int = 10
+    # ---- 10x10 window ----
+    seq_len: int = 10                 # trading days per window (each sample is 10 days x 10 stocks)
+    window_shift: int = 2             # sliding stride between consecutive training windows
+    ema_span: int = 60                # EMA span for per-window (r - EMA_mean)/EMA_vol standardization
+    # event = a window whose largest single-day up-move of the inflation state
+    # (surge = max_{t in window} delta_s_t) is in the TRAIN top decile.
+    event_quantile: float = 0.90      # top 10% of the surge metric = event
     # optional date window (YYYY-MM-DD) to restrict data and reduce train/test
     # regime drift; None = use all data. Pick with select_window.py.
     start_date: str = None
@@ -78,11 +88,29 @@ class Config:
     tickers: List[str] = field(default_factory=lambda: list(TICKERS))
 
     def htag(self) -> str:
-        """Tag encoding h_t_max, so different t_max runs don't overwrite each other."""
-        return f"tmax{self.h_t_max:g}"
+        """Tag for h-function artifacts (ckpt + figures), encoding the event quantile
+        and h_t_max, so different (quantile, t_max) runs never overwrite each other.
+        E.g. event_quantile=0.99, h_t_max=0.6 -> 'q99_tmax0.6'."""
+        q = round(self.event_quantile * 100, 4)
+        return f"q{q:g}_tmax{self.h_t_max:g}"
 
     def hfunction_ckpt(self) -> str:
         return os.path.join(self.ckpt_dir, f"hfunction_{self.htag()}.pt")
+
+    @property
+    def data_dim(self) -> int:
+        """Flattened window dimension fed to the SDE/model = seq_len * n_assets (10*10=100)."""
+        return self.seq_len * self.n_assets
+
+    def resolve_state(self) -> str:
+        """Locate the inflation-state CSV: ~/Desktop path, else the project dir copy."""
+        if os.path.exists(self.state_csv):
+            return self.state_csv
+        local = os.path.join(os.path.dirname(__file__), "inflation_state.csv")
+        if os.path.exists(local):
+            return local
+        raise FileNotFoundError(
+            f"Could not find inflation_state.csv at {self.state_csv} or in the project dir.")
 
     def resolve_csv(self) -> str:
         """Spec: use ~/Desktop path; fall back to a same-named file in the project dir."""

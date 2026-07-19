@@ -22,7 +22,7 @@ def sample_unconditional(cfg, score_model):
     score_model.eval()
 
     def step(b):
-        return sde.sample(score_model, (b, cfg.n_assets), cfg.device, cfg.n_steps, cfg.eps0)
+        return sde.sample(score_model, (b, cfg.data_dim), cfg.device, cfg.n_steps, cfg.eps0)
 
     print(f"[sample] unconditional: {cfg.n_sample} samples, {cfg.n_steps} steps")
     return _batched(step, cfg.n_sample, cfg.sample_batch, cfg.n_assets, cfg.device)
@@ -34,7 +34,7 @@ def sample_conditional(cfg, score_model, h_model):
     h_model.eval()
 
     def step(b):
-        return sde.sample_guided(score_model, h_model, (b, cfg.n_assets), cfg.device,
+        return sde.sample_guided(score_model, h_model, (b, cfg.data_dim), cfg.device,
                                  cfg.n_steps, cfg.eps0, delta=cfg.delta, gamma=cfg.gamma,
                                  h_t_max=cfg.h_t_max)
 

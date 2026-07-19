@@ -1,6 +1,9 @@
 """Transformer backbone (score / eps-prediction) and Transformer classifier (h).
 
-Both tokenize the 10 stocks into 10 tokens and run cross-sectional self-attention.
+A 10-day x 10-stock window is flattened to seq_len*n_assets = 100 tokens (day-major:
+flat index d*n_assets + s). Each token carries its scalar return plus a 2D positional
+embedding (day position + stock identity), and the encoder runs full spatio-temporal
+self-attention over the 100 tokens.
 """
 import math
 import torch
@@ -19,23 +22,28 @@ def timestep_embedding(t, dim):
 
 
 class _Tokenizer(nn.Module):
-    """x (B,n) -> tokens (B,n,d_model) with per-stock identity embedding + time cond."""
-    def __init__(self, n_assets, d_model):
+    """x (B, seq*n) flattened window -> tokens (B, seq*n, d_model) with day + stock
+    positional embeddings and diffusion-time conditioning."""
+    def __init__(self, seq_len, n_assets, d_model):
         super().__init__()
-        self.n = n_assets
-        self.d = d_model
-        self.value_proj = nn.Linear(1, self.d)
-        self.id_emb = nn.Embedding(self.n, self.d)
+        self.seq, self.n, self.d = seq_len, n_assets, d_model
+        self.value_proj = nn.Linear(1, d_model)
+        self.day_emb = nn.Embedding(seq_len, d_model)       # temporal position (10 days)
+        self.stock_emb = nn.Embedding(n_assets, d_model)    # cross-sectional identity (10 stocks)
         self.t_mlp = nn.Sequential(
-            nn.Linear(self.d, self.d), nn.SiLU(), nn.Linear(self.d, self.d))
+            nn.Linear(d_model, d_model), nn.SiLU(), nn.Linear(d_model, d_model))
+        # day/stock index of each of the seq*n tokens in the day-major (d*n + s) layout
+        self.register_buffer("day_ids", torch.arange(seq_len).repeat_interleave(n_assets),
+                             persistent=False)
+        self.register_buffer("stock_ids", torch.arange(n_assets).repeat(seq_len),
+                             persistent=False)
 
     def forward(self, x, t):
-        B = x.shape[0]
-        tok = self.value_proj(x.unsqueeze(-1))                       # (B,n,d)
-        ids = torch.arange(self.n, device=x.device)
-        tok = tok + self.id_emb(ids).unsqueeze(0)                    # + identity
-        t_emb = self.t_mlp(timestep_embedding(t, self.d))            # (B,d)
-        tok = tok + t_emb.unsqueeze(1)                               # broadcast time cond
+        tok = self.value_proj(x.unsqueeze(-1))                       # (B, seq*n, d)
+        tok = tok + self.day_emb(self.day_ids).unsqueeze(0)          # + day position
+        tok = tok + self.stock_emb(self.stock_ids).unsqueeze(0)      # + stock identity
+        t_emb = self.t_mlp(timestep_embedding(t, self.d))           # (B, d)
+        tok = tok + t_emb.unsqueeze(1)                              # broadcast time cond
         return tok
 
 
@@ -47,31 +55,32 @@ def _make_encoder(d_model, n_heads, n_layers, dim_ff, dropout):
 
 
 class TransformerScore(nn.Module):
-    """eps-prediction backbone (score matching). Uses the pre_* arch params."""
+    """eps-prediction backbone (score matching). Uses the pre_* arch params.
+    Input/output are flattened windows of shape (B, seq_len*n_assets)."""
     def __init__(self, cfg):
         super().__init__()
-        self.tok = _Tokenizer(cfg.n_assets, cfg.pre_d_model)
+        self.tok = _Tokenizer(cfg.seq_len, cfg.n_assets, cfg.pre_d_model)
         self.enc = _make_encoder(cfg.pre_d_model, cfg.pre_n_heads,
                                  cfg.pre_n_layers, cfg.pre_dim_ff, cfg.pre_dropout)
         self.head = nn.Linear(cfg.pre_d_model, 1)
 
     def forward(self, x, t):
-        h = self.enc(self.tok(x, t))            # (B,n,d)
-        return self.head(h).squeeze(-1)         # (B,n)
+        h = self.enc(self.tok(x, t))            # (B, seq*n, d)
+        return self.head(h).squeeze(-1)         # (B, seq*n)
 
 
 class TransformerClassifier(nn.Module):
     """h-function: single logit (B,). Uses the h_* arch params. Sigmoid at inference."""
     def __init__(self, cfg):
         super().__init__()
-        self.tok = _Tokenizer(cfg.n_assets, cfg.h_d_model)
+        self.tok = _Tokenizer(cfg.seq_len, cfg.n_assets, cfg.h_d_model)
         self.enc = _make_encoder(cfg.h_d_model, cfg.h_n_heads,
                                  cfg.h_n_layers, cfg.h_dim_ff, cfg.h_dropout)
         self.head = nn.Sequential(
             nn.Linear(cfg.h_d_model, cfg.h_d_model), nn.SiLU(), nn.Linear(cfg.h_d_model, 1))
 
     def forward(self, x, t):
-        h = self.enc(self.tok(x, t)).mean(dim=1)   # mean-pool over 10 tokens
+        h = self.enc(self.tok(x, t)).mean(dim=1)   # mean-pool over seq*n tokens
         return self.head(h).squeeze(-1)            # (B,) logit
 
 

@@ -81,7 +81,9 @@ def train_hfunction(cfg, data):
 
     os.makedirs(cfg.ckpt_dir, exist_ok=True)
     ckpt_path = cfg.hfunction_ckpt()
-    torch.save({"model": model.state_dict(), "h_t_max": cfg.h_t_max}, ckpt_path)
+    arch = {k: getattr(cfg, k) for k in ("h_d_model", "h_n_heads", "h_n_layers",
+                                         "h_dim_ff", "h_dropout", "seq_len", "n_assets")}
+    torch.save({"model": model.state_dict(), "h_t_max": cfg.h_t_max, "arch": arch}, ckpt_path)
 
     fig_path = os.path.join(cfg.fig_dir, cfg.htag(), "loss_hfunction.png")
     os.makedirs(os.path.dirname(fig_path), exist_ok=True)

@@ -43,7 +43,9 @@ def train_pretrain(cfg, data):
     os.makedirs(cfg.ckpt_dir, exist_ok=True)
     ema_model = TransformerScore(cfg).to(device)
     ema.copy_to(ema_model)
-    torch.save({"model": model.state_dict(), "ema": ema_model.state_dict()},
+    arch = {k: getattr(cfg, k) for k in ("pre_d_model", "pre_n_heads", "pre_n_layers",
+                                         "pre_dim_ff", "pre_dropout", "seq_len", "n_assets")}
+    torch.save({"model": model.state_dict(), "ema": ema_model.state_dict(), "arch": arch},
                os.path.join(cfg.ckpt_dir, "pretrain.pt"))
 
     os.makedirs(cfg.fig_dir, exist_ok=True)
