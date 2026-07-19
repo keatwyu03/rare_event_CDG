@@ -43,6 +43,8 @@ def build_cfg(description=""):
     """Config + the subset of CLI flags that key checkpoints / sample files."""
     cfg = Config()
     p = argparse.ArgumentParser(description=description)
+    p.add_argument("--event-type", default=cfg.event_type,
+                   choices=["abs_change", "absval", "upper_change", "lower_change"])
     p.add_argument("--event-quantile", type=float, default=cfg.event_quantile)
     p.add_argument("--h-t-max", type=float, default=cfg.h_t_max)
     p.add_argument("--gamma", type=float, default=cfg.gamma)

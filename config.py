@@ -11,31 +11,40 @@ import torch
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Stock universe (order is fixed; data.py will re-detect from the CSV header anyway).
-TICKERS: List[str] = ["IBM", "CSCO", "AAPL", "MSFT", "ORCL",
-                      "INTC", "TXN", "QCOM", "AMAT", "ADBE"]
+TICKERS: List[str] = ["AAPL", "ORCL", "MSFT", "IBM"]
 
 
 @dataclass
 class Config:
     # ---- data ----
     # Both inputs are built by explore/import_data.py (single injection point):
-    #   csv_path  — daily adjusted-close prices for the 10 tickers (yfinance)
-    #   state_csv — latent inflation-pressure state (s + daily increment delta_s,
-    #               Kalman-filtered via latent_state_estimation/); delta_s drives
-    #               the surge event. resolve_csv/resolve_state fall back to the
-    #               legacy Desktop / project-dir files if these don't exist yet.
+    #   csv_path  — daily adjusted-close prices for the TICKERS universe (yfinance)
+    #   state_csv — daily latent macro-regime state (level s + daily change
+    #               delta_s, Kalman-filtered via latent_state_estimation/);
+    #               delta_s drives the surge event.
     csv_path: str = os.path.join(_HERE, "explore", "macro_data_new.csv")
-    state_csv: str = os.path.join(_HERE, "latent_state_estimation", "inflation_state.csv")
-    train_frac: float = 0.80          # time-ordered split, no shuffle
-    n_assets: int = 10
+    state_csv: str = os.path.join(_HERE, "latent_state_estimation", "latent_state.csv")
+    train_frac: float = 0.8094        # time-ordered split, no shuffle. 0.8094 of the
+                                      # current 6293 windows -> test = last 1200 windows,
+                                      # matching diffusion_stress_testing's test_days=1200
+    n_assets: int = 4                 # must match len(TICKERS)
     # ---- 10x10 window ----
     seq_len: int = 10                 # trading days per window (each sample is 10 days x 10 stocks)
     window_shift: int = 1             # sliding stride between consecutive training windows
                                       # (1 = every day starts a window, as in cdg_finance)
     ema_span: int = 60                # EMA span for per-window (r - EMA_mean)/EMA_vol standardization
-    # event = a window whose largest single-day up-move of the inflation state
-    # (surge = max_{t in window} delta_s_t) is in the TRAIN top decile.
-    event_quantile: float = 0.90      # top 10% of the surge metric = event
+    # ---- event condition (indicator tuner — matches diffusion_stress_testing) ----
+    # Z_start / Z_end are the latent state level at the window's first / last
+    # day, standardized with TRAIN-row stats. Threshold and mask use the EXACT
+    # branch logic of diffusion_stress_testing (get_event_threshold_from_percentile
+    # + the event masks in its main.py):
+    #   "abs_change":   |Z_end - Z_start| >= thr        (two-sided change)
+    #   "absval":       |Z_end|          >= thr         (extreme level)
+    #   "upper_change": Z_end - Z_start  >= thr         (one-sided up move)
+    #   "lower_change": Z_end - Z_start  <= -thr        (one-sided down move)
+    event_type: str = "upper_change"  # "absval", "abs_change", "upper_change", or "lower_change"
+    event_quantile: float = 0.90      # top (1-q)=10% of the event metric = event
+                                      # (their event_threshold=0.10 top-fraction == our 0.90 quantile)
     # optional date window (YYYY-MM-DD) to restrict data and reduce train/test
     # regime drift; None = use all data. Pick with select_window.py.
     start_date: str = None
@@ -93,11 +102,11 @@ class Config:
     tickers: List[str] = field(default_factory=lambda: list(TICKERS))
 
     def htag(self) -> str:
-        """Tag for h-function artifacts (ckpt + figures), encoding the event quantile
-        and h_t_max, so different (quantile, t_max) runs never overwrite each other.
-        E.g. event_quantile=0.99, h_t_max=0.6 -> 'q99_tmax0.6'."""
+        """Tag for h-function artifacts (ckpt + figures), encoding the event type,
+        quantile and h_t_max, so different event/(quantile, t_max) runs never
+        overwrite each other. E.g. -> 'upper_change_q90_tmax1'."""
         q = round(self.event_quantile * 100, 4)
-        return f"q{q:g}_tmax{self.h_t_max:g}"
+        return f"{self.event_type}_q{q:g}_tmax{self.h_t_max:g}"
 
     def hfunction_ckpt(self) -> str:
         return os.path.join(self.ckpt_dir, f"hfunction_{self.htag()}.pt")
@@ -108,16 +117,13 @@ class Config:
         return self.seq_len * self.n_assets
 
     def resolve_state(self) -> str:
-        """Locate the inflation-state CSV: cfg path (latent_state_estimation output
-        by default), else the legacy Desktop / project-dir copies."""
+        """Locate the latent-state CSV (latent_state_estimation output)."""
         for p in (self.state_csv,
-                  os.path.join(_HERE, "latent_state_estimation", "inflation_state.csv"),
-                  os.path.expanduser("~/Desktop/inflation_state.csv"),
-                  os.path.join(_HERE, "inflation_state.csv")):
+                  os.path.join(_HERE, "latent_state_estimation", "latent_state.csv")):
             if p and os.path.exists(p):
                 return p
         raise FileNotFoundError(
-            f"No inflation state CSV found (tried {self.state_csv} + legacy fallbacks). "
+            f"No latent state CSV found (tried {self.state_csv}). "
             f"Build it with: python explore/import_data.py --state")
 
     def resolve_csv(self) -> str:

@@ -34,12 +34,13 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-$GPU}"
 # Built by `python explore/import_data.py` (stock prices + latent state);
 # config.py falls back to the legacy Desktop/project files if these are missing.
 CSV_PATH="${CSV_PATH:-explore/macro_data_new.csv}"
-STATE_CSV="${STATE_CSV:-latent_state_estimation/inflation_state.csv}"
+STATE_CSV="${STATE_CSV:-latent_state_estimation/latent_state.csv}"
 SEED="${SEED:-0}"
 START_DATE=""   # data window (YYYY-MM-DD); set empty for all data
 END_DATE=""       # pick a stable window with: python select_window.py
-EVENT_QUANTILE="${EVENT_QUANTILE:-0.90}" # Δy quantile = event; 0.90=top10%, 0.99=rarer.
-                                         # h ckpt/figures are keyed by this (q90, q99, ...).
+EVENT_TYPE="${EVENT_TYPE:-upper_change}" # abs_change | absval | upper_change | lower_change
+EVENT_QUANTILE="${EVENT_QUANTILE:-0.90}" # event metric quantile; 0.90=top10%, 0.99=rarer.
+                                         # h ckpt/figures are keyed by (type, quantile, tmax).
 
 # ---- pretrain: score backbone (richer net — score matching is the harder task) ----
 PRE_D_MODEL="${PRE_D_MODEL:-256}"
@@ -88,6 +89,7 @@ if [ "$STAGE" = "analysis" ]; then
             --state-csv "$STATE_CSV" \
             --start-date "$START_DATE" \
             --end-date   "$END_DATE" \
+            --event-type "$EVENT_TYPE" \
             --event-quantile "$EVENT_QUANTILE" \
             --h-t-max   "$H_T_MAX" \
             --gamma     "$GAMMA" || echo "!!!! $s failed — continuing"
@@ -101,6 +103,7 @@ python -u main.py \
     --state-csv "$STATE_CSV" \
     --start-date "$START_DATE" \
     --end-date   "$END_DATE" \
+    --event-type "$EVENT_TYPE" \
     --event-quantile "$EVENT_QUANTILE" \
     --seed      "$SEED" \
     --pre-d-model  "$PRE_D_MODEL" \

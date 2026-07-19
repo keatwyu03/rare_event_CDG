@@ -8,8 +8,11 @@ where EMA_mean/vol are the trailing EMA(span) of each stock's logret evaluated a
 the window's ENTRY day (one 10-vector each), so the transform is invertible
 (r = z*sig_entry + mu_entry) and uses no future information.
 
-Event: a window qualifies if the largest single-day up-move of the inflation state
-inside it, surge = max_{t in window} delta_s_t, is in the TRAIN top decile.
+Event: Z_start/Z_end are the latent state level at the window's first/last day
+(standardized with TRAIN-row stats, as in diffusion_stress_testing). The event
+threshold and mask branch on cfg.event_type with the EXACT logic of
+diffusion_stress_testing (abs_change / absval / upper_change / lower_change);
+default: upper_change top decile.
 """
 import numpy as np
 import pandas as pd
@@ -28,11 +31,12 @@ def build_clean_frame(cfg: Config, verbose: bool = True):
     logret.columns = [f"{c}_logret" for c in price_cols]
 
     st = pd.read_csv(cfg.resolve_state(), index_col=0, parse_dates=True)
-    if "delta_s" not in st.columns:
-        raise KeyError(f"'delta_s' not in {cfg.resolve_state()}; columns={list(st.columns)}")
-    ds = st["delta_s"].rename("delta_s")
+    if "s" not in st.columns:
+        raise KeyError(f"'s' (latent state level) not in {cfg.resolve_state()}; "
+                       f"columns={list(st.columns)}")
+    sl = st["s"].rename("s")
 
-    data = pd.concat([logret, ds], axis=1).dropna(how="any")
+    data = pd.concat([logret, sl], axis=1).dropna(how="any")
     if verbose:
         print(f"[data] stocks={cfg.resolve_csv()}")
         print(f"[data] state ={cfg.resolve_state()}")
@@ -53,7 +57,8 @@ def load_data(cfg: Config):
 
     seq, n, shift = cfg.seq_len, cfg.n_assets, cfg.window_shift
     R = data[logret_cols].to_numpy(np.float64)          # (T, n) logret
-    ds = data["delta_s"].to_numpy(np.float64)           # (T,)  inflation increment
+    S = data["s"].to_numpy(np.float64)                  # (T,)  latent state level
+                                                        # (delta_s in the CSV is ignored)
 
     # causal EMA mean & vol per stock (entry-day standardizer)
     rf = pd.DataFrame(R, columns=logret_cols)
@@ -61,29 +66,64 @@ def load_data(cfg: Config):
     SG = rf.ewm(span=cfg.ema_span, min_periods=20).std().shift(1).to_numpy()
     valid = np.isfinite(MU).all(1) & np.isfinite(SG).all(1) & (SG > 0).all(1)
     first = int(np.argmax(valid))                       # EMA warm-up cut (contiguous thereafter)
-    R, MU, SG, ds = R[first:], MU[first:], SG[first:], ds[first:]
+    R, MU, SG, S = R[first:], MU[first:], SG[first:], S[first:]
     T = len(R)
 
     starts = np.arange(0, T - seq + 1, shift)
     Z = np.empty((len(starts), seq, n), np.float32)
-    surge = np.empty(len(starts), np.float32)
     mu_entry = MU[starts].astype(np.float32)            # (Nw, n) for invertibility
     sig_entry = SG[starts].astype(np.float32)
     for i, s in enumerate(starts):
         Z[i] = ((R[s:s + seq] - MU[s]) / SG[s]).astype(np.float32)   # entry EMA, broadcast over days
-        surge[i] = ds[s:s + seq].max()
     X = Z.reshape(len(starts), seq * n)                 # flatten day-major (d*n + s)
 
-    # time-ordered split (NO shuffle), then TRAIN-derived surge threshold
+    # time-ordered split (NO shuffle)
     n_train = int(cfg.train_frac * len(X))
     X_train, X_test = X[:n_train], X[n_train:]
-    thr = float(np.quantile(surge[:n_train], cfg.event_quantile))
-    B_train = (surge[:n_train] >= thr).astype(np.float32)
-    B_test = (surge[n_train:] >= thr).astype(np.float32)
+
+    # ---- event condition (EXACT diffusion_stress_testing logic) ----
+    # Z_start/Z_end: latent state level at the window's first/last day,
+    # standardized with TRAIN-row stats only (no leakage).
+    row_cut = starts[n_train] if n_train < len(starts) else T
+    z_mean, z_std = S[:row_cut].mean(), S[:row_cut].std()
+    Z_start = (S[starts] - z_mean) / z_std              # (Nw,)
+    Z_end = (S[starts + seq - 1] - z_mean) / z_std      # (Nw,)
+    diffs = Z_end - Z_start
+    top_fraction = 1.0 - cfg.event_quantile             # their event_threshold semantics
+
+    # threshold: their get_event_threshold_from_percentile, TRAIN windows only
+    if cfg.event_type == "abs_change":
+        thr = float(np.quantile(np.abs(diffs[:n_train]), 1.0 - top_fraction))
+    elif cfg.event_type == "absval":
+        thr = float(np.quantile(np.abs(Z_end[:n_train]), 1.0 - top_fraction))
+    elif cfg.event_type == "upper_change":
+        thr = float(np.quantile(diffs[:n_train], 1.0 - top_fraction))
+    elif cfg.event_type == "lower_change":
+        thr = -float(np.quantile(diffs[:n_train], top_fraction))
+    else:
+        raise NotImplementedError(
+            f"event_type={cfg.event_type!r} not supported; only 'abs_change', "
+            "'absval', 'upper_change', and 'lower_change' are implemented.")
+
+    # mask: their main.py event branches
+    if cfg.event_type == "abs_change":
+        event = np.abs(diffs) >= thr
+    elif cfg.event_type == "absval":
+        event = np.abs(Z_end) >= thr
+    elif cfg.event_type == "upper_change":
+        event = diffs >= thr
+    elif cfg.event_type == "lower_change":
+        event = diffs <= -thr
+    else:
+        raise NotImplementedError(
+            f"event_type={cfg.event_type!r} not supported; only 'abs_change', "
+            "'absval', 'upper_change', and 'lower_change' are implemented.")
+    B_train = event[:n_train].astype(np.float32)
+    B_test = event[n_train:].astype(np.float32)
 
     pos = int(B_train.sum())
     print(f"[data] windows={len(X)} (train={len(X_train)}, test={len(X_test)})  dim={seq*n}")
-    print(f"[data] surge threshold (train q{cfg.event_quantile})={thr:.6f}")
+    print(f"[data] event: {cfg.event_type} top {top_fraction:.1%} -> thr={thr:.4f} std")
     print(f"[data] train events={pos}/{len(B_train)} ({pos/len(B_train):.1%})  "
           f"test events={int(B_test.sum())}/{len(B_test)} ({B_test.mean():.1%})")
 

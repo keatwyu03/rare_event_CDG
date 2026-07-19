@@ -24,9 +24,9 @@ point, mirroring cdg_finance):
 - `explore/macro_data_new.csv` — daily adjusted-close **prices** for the 10
   tickers (IBM, CSCO, AAPL, MSFT, ORCL, INTC, TXN, QCOM, AMAT, ADBE) from
   yfinance; `data.py` computes log returns itself. → `config.csv_path`
-- `latent_state_estimation/inflation_state.csv` — the latent
-  **inflation-pressure state**: `s` = Kalman-filtered daily state level,
-  `delta_s` = its daily increment (drives the surge event label).
+- `latent_state_estimation/latent_state.csv` — the daily latent
+  **macro-regime state**: `s` = Kalman-filtered daily state level,
+  `delta_s` = its daily change (drives the surge event label).
   → `config.state_csv`
 
 The state is estimated by `latent_state_estimation/` (logic matches the

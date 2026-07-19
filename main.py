@@ -47,8 +47,11 @@ def build_config():
                    help="latent inflation-state CSV (delta_s drives the event label)")
     p.add_argument("--start-date", default=cfg.start_date, help="data window start YYYY-MM-DD")
     p.add_argument("--end-date", default=cfg.end_date, help="data window end YYYY-MM-DD")
+    p.add_argument("--event-type", default=cfg.event_type,
+                   choices=["abs_change", "absval", "upper_change", "lower_change"],
+                   help="event condition on the latent state (diffusion_stress_testing logic)")
     p.add_argument("--event-quantile", type=float, default=cfg.event_quantile,
-                   help="Δy quantile defining the event (0.90=top10%%, 0.99=top1%%/rarer)")
+                   help="event metric quantile (0.90=top10%%, 0.99=top1%%/rarer)")
     p.add_argument("--device", default=cfg.device)
     p.add_argument("--gpu", type=int, default=None, help="CUDA device index to use")
     p.add_argument("--seed", type=int, default=cfg.seed)

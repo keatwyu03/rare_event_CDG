@@ -6,15 +6,15 @@ mirroring the cdg_finance explore/import_data.py):
       Date index + one column per ticker) — data.py computes logret itself.
       config.csv_path points here by default.
 
-  latent_state_estimation/inflation_state.csv
-      the daily latent macro state from LatentStateEstimator (logic matches
-      diffusion_stress_testing): growth + inflation monthly PC1 factors
-      anchor ONE Kalman-filtered state driven by the RAW daily variables of
-      both panels appended and z-scored (state_space, default), or the
-      standardized average of the two per-group tracking portfolios
+  latent_state_estimation/latent_state.csv
+      the daily latent macro-regime state from LatentStateEstimator (logic
+      matches diffusion_stress_testing): growth + inflation monthly PC1
+      factors anchor ONE Kalman-filtered state driven by the RAW daily
+      variables of both panels appended and z-scored (state_space, default),
+      or the standardized average of the two per-group tracking portfolios
       (--method tracking_regression). `s` = daily state level, `delta_s` =
-      its daily increment (drives the surge event label; row 1 is set to
-      s[0] so s = cumsum(delta_s) exactly). config.state_csv points here.
+      its daily change (drives the surge event label; row 1 is set to s[0]
+      so s = cumsum(delta_s) exactly). config.state_csv points here.
 
 The estimator runs off the committed macro panel CSVs in
 latent_state_estimation/; refresh those first (rarely, needs FRED_API_KEY)
@@ -64,14 +64,14 @@ def build_state(method="state_space"):
     s = est.fit().rename("s")                   # daily latent state level
     delta = s.diff().rename("delta_s")
     delta.iloc[0] = s.iloc[0]                   # keep row 1 (s = cumsum(delta_s))
-    out = os.path.join(_LSE, "inflation_state.csv")
+    out = os.path.join(_LSE, "latent_state.csv")
     pd.DataFrame({"delta_s": delta, "s": s}).to_csv(out)
     print(f"[import] {out}: {len(s)} rows, {s.index[0].date()} -> {s.index[-1].date()}  "
           f"(method={method})")
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser(description="Build macro_data_new.csv + inflation_state.csv")
+    p = argparse.ArgumentParser(description="Build macro_data_new.csv + latent_state.csv")
     p.add_argument("--stocks", action="store_true", help="only download stock prices")
     p.add_argument("--state", action="store_true", help="only estimate the latent state")
     p.add_argument("--method", choices=["state_space", "tracking_regression"],
