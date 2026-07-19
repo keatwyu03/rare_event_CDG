@@ -29,14 +29,17 @@ point, mirroring cdg_finance):
   `delta_s` = its daily increment (drives the surge event label).
   → `config.state_csv`
 
-The state is estimated by `latent_state_estimation/` (ported from cdg_finance):
-`tracking_regression.py` builds a PCA monthly factor + daily futures tracking
-portfolio per macro variable; `state_space.py` runs the joint Kalman filter
-(MLE, Nelder-Mead — takes several minutes); `macro_main.py` wraps both as
-`LatentStateEstimator`. Default is the JOINT growth+inflation state (both
-factors combine into one vector observation for a single Kalman filter, as in
-cdg_finance); `--inflation-only` gives the scalar variant. The committed macro
-panel CSVs are used as-is — refresh them (rarely) with
+The state is estimated by `latent_state_estimation/` (logic matches the
+diffusion_stress_testing repo). Both methods start from per-group monthly PC1
+factors (growth and inflation get separate PCAs, never a joint one), then:
+**state_space** (default) — the RAW daily market variables of both panels,
+appended and z-scored, drive one scalar Kalman-filtered state anchored at
+month-ends by both monthly factors (MLE, Nelder-Mead — can take a while; no
+tracking regression involved); **tracking_regression**
+(`--method tracking_regression`) — per-group tracking regressions produce
+daily tracking portfolios whose standardized average is the state (no Kalman
+filter). The committed macro panel CSVs are used as-is — refresh them (rarely)
+with
 `FRED_API_KEY=... python latent_state_estimation/macro_importer.py`.
 
 If the built files are missing, the loader falls back to the legacy

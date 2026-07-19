@@ -7,12 +7,14 @@ mirroring the cdg_finance explore/import_data.py):
       config.csv_path points here by default.
 
   latent_state_estimation/inflation_state.csv
-      JOINT growth+inflation latent macro state from LatentStateEstimator
-      (both monthly factors + both daily tracking portfolios drive ONE
-      Kalman-filtered state, matching cdg_finance): `s` = daily state level,
-      `delta_s` = its daily increment (drives the surge event label; row 1
-      is set to s[0] so s = cumsum(delta_s) exactly). config.state_csv
-      points here by default. --inflation-only gives the scalar variant.
+      the daily latent macro state from LatentStateEstimator (logic matches
+      diffusion_stress_testing): growth + inflation monthly PC1 factors
+      anchor ONE Kalman-filtered state driven by the RAW daily variables of
+      both panels appended and z-scored (state_space, default), or the
+      standardized average of the two per-group tracking portfolios
+      (--method tracking_regression). `s` = daily state level, `delta_s` =
+      its daily increment (drives the surge event label; row 1 is set to
+      s[0] so s = cumsum(delta_s) exactly). config.state_csv points here.
 
 The estimator runs off the committed macro panel CSVs in
 latent_state_estimation/; refresh those first (rarely, needs FRED_API_KEY)
@@ -20,10 +22,10 @@ with latent_state_estimation/macro_importer.py. The Kalman MLE (Nelder-Mead
 over the full daily sample) can take several minutes.
 
 Usage:
-  python explore/import_data.py                    # both files (joint state)
-  python explore/import_data.py --stocks           # prices only
-  python explore/import_data.py --state            # latent state only
-  python explore/import_data.py --inflation-only   # scalar inflation state
+  python explore/import_data.py                             # both files
+  python explore/import_data.py --stocks                    # prices only
+  python explore/import_data.py --state                     # latent state only
+  python explore/import_data.py --method tracking_regression
 """
 import argparse
 import os
@@ -57,32 +59,30 @@ def build_stocks():
     print(f"[import] {out}: {len(px)} rows, {px.index[0].date()} -> {px.index[-1].date()}")
 
 
-def build_state(variables=("growth", "inflation"), method="state_space"):
-    est = LatentStateEstimator(method=method, variables=variables)
-    s = est.fit().rename("s")                   # filtered daily state level
+def build_state(method="state_space"):
+    est = LatentStateEstimator(method=method)
+    s = est.fit().rename("s")                   # daily latent state level
     delta = s.diff().rename("delta_s")
     delta.iloc[0] = s.iloc[0]                   # keep row 1 (s = cumsum(delta_s))
     out = os.path.join(_LSE, "inflation_state.csv")
     pd.DataFrame({"delta_s": delta, "s": s}).to_csv(out)
     print(f"[import] {out}: {len(s)} rows, {s.index[0].date()} -> {s.index[-1].date()}  "
-          f"(variables={list(variables)})")
+          f"(method={method})")
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Build macro_data_new.csv + inflation_state.csv")
     p.add_argument("--stocks", action="store_true", help="only download stock prices")
     p.add_argument("--state", action="store_true", help="only estimate the latent state")
-    p.add_argument("--inflation-only", action="store_true",
-                   help="scalar inflation-only state instead of the joint default")
     p.add_argument("--method", choices=["state_space", "tracking_regression"],
                    default="state_space",
-                   help="state_space: joint Kalman filter (default); "
-                        "tracking_regression: standardized average of the daily "
-                        "tracking portfolios, no Kalman filter")
+                   help="state_space (default): raw daily variables of both panels "
+                        "drive one Kalman-filtered state anchored by both monthly "
+                        "PCA factors; tracking_regression: standardized average of "
+                        "the per-group daily tracking portfolios (no Kalman filter)")
     args = p.parse_args()
     run_both = not (args.stocks or args.state)
     if args.stocks or run_both:
         build_stocks()
     if args.state or run_both:
-        build_state(("inflation",) if args.inflation_only else ("growth", "inflation"),
-                    method=args.method)
+        build_state(method=args.method)
