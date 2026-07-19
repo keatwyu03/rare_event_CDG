@@ -49,40 +49,40 @@ class Config:
     # Score matching is the harder task, so this network is given a richer
     # architecture than the h-function. Tune independently.
     pre_d_model: int = 256
-    pre_n_heads: int = 8
-    pre_n_layers: int = 6
+    pre_n_heads: int = 16
+    pre_n_layers: int = 8
     pre_dim_ff: int = 512
     pre_dropout: float = 0.0
-    pre_epochs: int = 300
+    pre_epochs: int = 500
     pre_batch_size: int = 256
-    pre_lr: float = 2e-4
+    pre_lr: float = 1e-4
     ema_decay: float = 0.999
 
     # ---- h-function: time-dependent classifier (lighter network) ----
-    h_d_model: int = 128
-    h_n_heads: int = 4
-    h_n_layers: int = 4
+    h_d_model: int = 256
+    h_n_heads: int = 8
+    h_n_layers: int = 6
     h_dim_ff: int = 256
     h_dropout: float = 0.0
-    h_epochs: int = 300
+    h_epochs: int = 500
     h_batch_size: int = 256
-    h_lr: float = 2e-4
+    h_lr: float = 1e-4
     # Only diffusion times t in [eps0, h_t_max] are used to TRAIN h and to APPLY
     # its guidance during sampling. Near the noise end (t -> 1) the noised data
     # carries almost no class signal, so restricting to small t (near clean data)
     # stabilizes h-training and avoids guiding with an untrained noise regime.
-    h_t_max: float = 0.6
+    h_t_max: float = 1.0
     # Positive-class weight for BCEWithLogitsLoss (the event is only ~10% of days).
     # <= 0 means AUTO = #neg/#pos (≈9 here); set a positive value to override and
     # study sensitivity to the imbalance weighting.
     h_pos_weight: float = -1.0
 
     # ---- sampling ----
-    n_sample: int = 20000             # M samples for histograms / correlation
-    n_steps: int = 500                # Euler-Maruyama reverse steps
-    sample_batch: int = 4000          # mini-batch size for sampling (GPU memory)
+    n_sample: int = 10000             # M samples for histograms / correlation
+    n_steps: int = 100                # Euler-Maruyama reverse steps
+    sample_batch: int = 1000          # mini-batch size for sampling (GPU memory)
     delta: float = 1e-3               # numerical floor in log(h + delta)  (note eq 14)
-    gamma: float = 1.0                # guidance strength (1.0 = exact Doob)
+    gamma: float = 2.0                # guidance strength (1.0 = exact Doob)
 
     # ---- misc ----
     seed: int = 0
