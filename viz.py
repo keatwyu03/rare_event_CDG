@@ -42,11 +42,17 @@ def hist_compare(cfg, X_gen_raw, X_actual_raw, tickers, filename, title,
     gen = _cross(X_gen_raw, n)
     act = (_cross_dedup(X_actual_raw, n, actual_gidx, seq, shift)
            if actual_gidx is not None else _cross(X_actual_raw, n))
-    fig, axes = plt.subplots(2, 5, figsize=(20, 8))
-    for j, ax in enumerate(axes.flat):
+    cols = min(n, 5)
+    rows = int(np.ceil(n / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(4 * cols, 4 * rows))
+    axes = np.atleast_1d(axes).ravel()
+    for j in range(n):
+        ax = axes[j]
         ax.hist(act[:, j], bins=bins, density=True, alpha=0.5, label=actual_label, color="C0")
         ax.hist(gen[:, j], bins=bins, density=True, alpha=0.5, label=gen_label, color="C1")
         ax.set_title(tickers[j]); ax.legend(fontsize=7)
+    for ax in axes[n:]:
+        ax.axis("off")
     fig.suptitle(title)
     fig.tight_layout()
     p = os.path.join(cfg.fig_dir, filename)
