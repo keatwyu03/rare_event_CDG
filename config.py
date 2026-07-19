@@ -30,7 +30,8 @@ class Config:
     n_assets: int = 10
     # ---- 10x10 window ----
     seq_len: int = 10                 # trading days per window (each sample is 10 days x 10 stocks)
-    window_shift: int = 2             # sliding stride between consecutive training windows
+    window_shift: int = 1             # sliding stride between consecutive training windows
+                                      # (1 = every day starts a window, as in cdg_finance)
     ema_span: int = 60                # EMA span for per-window (r - EMA_mean)/EMA_vol standardization
     # event = a window whose largest single-day up-move of the inflation state
     # (surge = max_{t in window} delta_s_t) is in the TRAIN top decile.
