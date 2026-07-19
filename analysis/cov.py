@@ -32,6 +32,8 @@ def _plot_panels(panels, tickers, kind, title, path):
         lim = max(np.abs(M).max() for _, M, _ in mats)
         vmin, vmax = -lim, lim
 
+    fmt = "{:.2f}" if kind == "corr" else "{:.3f}"
+    font_size = max(8, min(13, 40 // n))
     fig, axes = plt.subplots(2, 2, figsize=(12, 10.5))
     for ax, (lbl, M, cnt) in zip(axes.ravel(), mats):
         im = ax.imshow(M, vmin=vmin, vmax=vmax, cmap="RdBu_r")
@@ -39,6 +41,12 @@ def _plot_panels(panels, tickers, kind, title, path):
         ax.set_title(f"{lbl}  (n={cnt}{extra})", fontsize=10, fontweight="bold")
         ax.set_xticks(range(n)); ax.set_xticklabels(tickers, rotation=90, fontsize=7)
         ax.set_yticks(range(n)); ax.set_yticklabels(tickers, fontsize=7)
+        for r in range(n):
+            for c in range(n):
+                v = M[r, c]
+                ax.text(c, r, fmt.format(v), ha="center", va="center",
+                        fontsize=font_size, fontweight="bold",
+                        color="white" if abs(v) > 0.6 * abs(vmax) else "black")
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.suptitle(title, fontsize=13, fontweight="bold")
     fig.tight_layout()

@@ -103,15 +103,23 @@ def corr_grid(cfg, actual, gen_unc_tr, gen_cond_tr, gen_unc_te, gen_cond_te,
     ]
     mats = {name: M for name, M in display}
 
+    font_size = max(8, min(13, 40 // n))
     fig, axes = plt.subplots(2, 3, figsize=(18, 11))
     for ax, (name, _) in zip(axes.flat, display):
-        im = ax.imshow(mats[name], vmin=-1, vmax=1, cmap="RdBu_r")
+        M = mats[name]
+        im = ax.imshow(M, vmin=-1, vmax=1, cmap="RdBu_r")
         extra = " (train-scaled)" if name.startswith("gen") and space.startswith("raw") else ""
-        ax.set_title(f"{name}{extra}  (avg={_avg_corr(mats[name]):.2f})")
+        ax.set_title(f"{name}{extra}  (avg={_avg_corr(M):.2f})")
         ax.set_xticks(range(n)); ax.set_xticklabels(tickers, rotation=90, fontsize=7)
         ax.set_yticks(range(n)); ax.set_yticklabels(tickers, fontsize=7)
+        for r in range(n):
+            for c in range(n):
+                v = M[r, c]
+                ax.text(c, r, f"{v:.2f}", ha="center", va="center",
+                        fontsize=font_size, fontweight="bold",
+                        color="white" if abs(v) > 0.6 else "black")
     fig.colorbar(im, ax=axes, fraction=0.02)
-    fig.suptitle(f"10x10 correlation [{tag}] ({space}): actual (train/test) vs generated")
+    fig.suptitle(f"{n}x{n} correlation [{tag}] ({space}): actual (train/test) vs generated")
     p = os.path.join(cfg.fig_dir, filename)
     os.makedirs(os.path.dirname(p), exist_ok=True)
     fig.savefig(p, dpi=120, bbox_inches="tight"); plt.close(fig)
