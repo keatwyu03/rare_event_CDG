@@ -2,9 +2,10 @@
 monthly macro panels + daily futures tracking portfolios in this directory
 (ported from the cdg_finance / diffusion_stress_testing repo).
 
-For this project the state of interest is the INFLATION-pressure state
-(variables=("inflation",), the scalar n=k=1 case); pass
-variables=("growth", "inflation") for the joint two-sensor state instead.
+Default is the JOINT growth+inflation state (both monthly factors and both
+daily tracking portfolios combine into one vector observation for a single
+Kalman filter — same as the cdg_finance default); pass
+variables=("inflation",) for the scalar inflation-only case.
 
 method:
     "state_space"         — Kalman filter: daily tracking portfolio(s) drive
@@ -28,7 +29,7 @@ from state_space import StateSpace
 class LatentStateEstimator:
 
     def __init__(self, method: str = "state_space",
-                 variables=("inflation",), data_dir: str = _dir):
+                 variables=("growth", "inflation"), data_dir: str = _dir):
         self.method = method
         self.variables = tuple(variables)
         self.data_dir = data_dir
